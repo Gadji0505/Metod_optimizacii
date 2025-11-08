@@ -1,52 +1,187 @@
-// Возвращает массив длины (inputsCount + 1), где последний элемент — bias (порог).
-public static double[] GenerateNeuronWeights(int inputsCount, Random rnd, bool enforceZeroMean = true, bool enforceUnitStd = true)
+using System;
+using System.IO;
+using System.Windows.Forms;
+
+namespace MO_31_2_Shurpaev_Elizabeth.NeiroNet
 {
-    int n = inputsCount + 1; // +1 для bias
-    double[] w = new double[n];
-
-    // Генерация нормальных N(0,1) с помощью Box-Muller
-    for (int i = 0; i < n; i += 2)
+    abstract class Layer
     {
-        double u1, u2;
-        do { u1 = rnd.NextDouble(); } while (u1 <= double.Epsilon); // избегаем 0
-        u2 = rnd.NextDouble();
-        double r = Math.Sqrt(-2.0 * Math.Log(u1));
-        double theta = 2.0 * Math.PI * u2;
-        double z0 = r * Math.Cos(theta);
-        double z1 = r * Math.Sin(theta);
-        w[i] = z0;
-        if (i + 1 < n) w[i + 1] = z1;
-    }
+        protected string name_Layer;
+        string pathDirWeights;
+        string pathFileWeights;
+        protected int numofneurons;
+        protected int numofprevneurons;
+        protected const double learningrate = 0.00399999;
+        protected const double momentum = 0;
+        protected double[,] lastdeltaweights;
+        protected Neuron[] neurons;
 
-    if (enforceZeroMean || enforceUnitStd)
-    {
-        // среднее по весам (включая bias)
-        double mean = 0;
-        for (int i = 0; i < n; ++i) mean += w[i];
-        mean /= n;
 
-        if (enforceZeroMean)
+        public Neuron[] Neurons { get => neurons; set => neurons = value; }
+        public double[] Date
         {
-            for (int i = 0; i < n; ++i) w[i] -= mean;
-        }
-
-        if (enforceUnitStd)
-        {
-            // вычислим выборочное стандартное отклонение
-            double sumSq = 0;
-            for (int i = 0; i < n; ++i)
+            set
             {
-                double d = w[i]; // уже центрированы, если enforceZeroMean=true
-                sumSq += d * d;
-            }
-            double variance = sumSq / n; // можно / (n-1) для несмещенной оценки, но для нормирования /n тоже ок
-            double sd = Math.Sqrt(Math.Max(variance, 1e-12)); // защита от нуля
-            if (Math.Abs(sd - 1.0) > 1e-12)
-            {
-                for (int i = 0; i < n; ++i) w[i] /= sd;
+                for (int i = 0; i < numofneurons; i++)
+                {
+                    Neurons[i].Activator(value);
+                }
             }
         }
-    }
+        protected Layer(int non, int nopn, NeuronType nt, string nm_Layer)
+        {
+            numofneurons = non;
+            numofprevneurons = nopn;
+            Neurons = new Neuron[non];
+            name_Layer = nm_Layer;
+            pathDirWeights = AppDomain.CurrentDomain.BaseDirectory + "memory\\";
+            pathFileWeights = pathDirWeights + name_Layer + "_memory.csv";
 
-    return w;
+            lastdeltaweights = new double[non, nopn + 1];
+            double[,] Weights;
+
+            if (File.Exists(pathFileWeights))
+                Weights = WeightInitialize(MemoryMode.GET, pathFileWeights);
+            else
+            {
+                Directory.CreateDirectory(pathDirWeights);
+                Weights = WeightInitialize(MemoryMode.INIT, pathFileWeights);
+            }
+
+            for (int i = 0; i < non; i++)
+            {
+                double[] tmp_weigts = new double[nopn + 1];
+                for (int j = 0; j < nopn + 1; j++)
+                {
+                    tmp_weigts[j] = Weights[i, j];
+                }
+                Neurons[i] = new Neuron(tmp_weigts, nt);
+            }
+        }
+        public double[,] WeightInitialize(MemoryMode mm, string path)
+        {
+            char[] delim = new char[] { ';', ' ' };
+            string tmpStr;
+            string[] tmpStrWeights;
+            double[,] weights = new double[numofneurons, numofprevneurons + 1];
+
+            switch (mm)
+            {
+                case MemoryMode.GET:
+                    tmpStrWeights = File.ReadAllLines(path);
+                    string[] memory_element;
+                    for (int i = 0; i < numofneurons; i++)
+                    {
+                        memory_element = tmpStrWeights[i].Split(delim);
+                        for (int j = 0; j < numofprevneurons + 1; j++)
+                        {
+                            weights[i, j] = double.Parse(memory_element[j].Replace(',', '.'),
+                                System.Globalization.CultureInfo.InvariantCulture);
+                        }
+                    }
+                    break;
+                case MemoryMode.SET:
+                    using (StreamWriter sw = new StreamWriter(path, false))
+                    {
+                        for (int i = 0; i < numofneurons; i++)
+                        {
+                            tmpStr = "";
+                            for (int j = 0; j < numofprevneurons + 1; j++)
+                            {
+                                weights[i, j] = Neurons[i].Weights[j];
+                                tmpStr += weights[i, j].ToString().Replace(',', '.') + ";";
+                            }
+                            sw.WriteLine(tmpStr.TrimEnd(';'));
+                        }
+                    }
+                    break;
+                case MemoryMode.INIT:
+                    Random random = new Random();
+                    for (int i = 0; i < numofneurons; i++)
+                    {
+                        double[] neuronWeights = GenerateNeuronWeights(numofprevneurons + 1, random);
+                        for (int j = 0; j < numofprevneurons + 1; j++)
+                        {
+                            weights[i, j] = neuronWeights[j];
+                            //if (weights[i, j] >= 1.0)
+                            //    weights[i, j] = 1.0;
+                            //if (weights[i, j] <= -1.0)
+                            //    weights[i, j] = -1.0;
+                        }
+                    }
+
+                    using (StreamWriter sw = new StreamWriter(path, false))
+                    {
+                        for (int i = 0; i < numofneurons; i++)
+                        {
+                            string line = "";
+                            for (int j = 0; j < numofprevneurons + 1; j++)
+                            {
+                                line += weights[i, j].ToString(System.Globalization.CultureInfo.InvariantCulture) + ";";
+                            }
+                            sw.WriteLine(line.TrimEnd(';'));
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+            return weights;
+        }
+
+        public static double[] GenerateNeuronWeights(int inputsCount, Random rnd, bool enforceZeroMean = true, bool enforceUnitStd = true)
+        {
+            int n = inputsCount + 1; // +1 для bias
+            double[] w = new double[n];
+
+            // Генерация нормальных N(0,1) с помощью Box-Muller
+            for (int i = 0; i < n; i += 2)
+            {
+                double u1, u2;
+                do { u1 = rnd.NextDouble(); } while (u1 <= double.Epsilon); // избегаем 0
+                u2 = rnd.NextDouble();
+                double r = Math.Sqrt(-2.0 * Math.Log(u1));
+                double theta = 2.0 * Math.PI * u2;
+                double z0 = r * Math.Cos(theta);
+                double z1 = r * Math.Sin(theta);
+                w[i] = z0;
+                if (i + 1 < n) w[i + 1] = z1;
+            }
+
+            if (enforceZeroMean || enforceUnitStd)
+            {
+                // среднее по весам (включая bias)
+                double mean = 0;
+                for (int i = 0; i < n; ++i) mean += w[i];
+                mean /= n;
+
+                if (enforceZeroMean)
+                {
+                    for (int i = 0; i < n; ++i) w[i] -= mean;
+                }
+
+                if (enforceUnitStd)
+                {
+                    // вычислим выборочное стандартное отклонение
+                    double sumSq = 0;
+                    for (int i = 0; i < n; ++i)
+                    {
+                        double d = w[i]; // уже центрированы, если enforceZeroMean=true
+                        sumSq += d * d;
+                    }
+                    double variance = sumSq / n; // можно / (n-1) для несмещенной оценки, но для нормирования /n тоже ок
+                    double sd = Math.Sqrt(Math.Max(variance, 1e-12)); // защита от нуля
+                    if (Math.Abs(sd - 1.0) > 1e-12)
+                    {
+                        for (int i = 0; i < n; ++i) w[i] /= sd;
+                    }
+                }
+            }
+
+            return w;
+        }
+
+        abstract public void Recognizee(Network net, Layer nextLayer);
+        abstract public double[] BackwardPass(double[] stuff);
+    }
 }
